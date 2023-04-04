@@ -5,8 +5,8 @@ from sklearn.datasets import fetch_20newsgroups
 import os
 
 
-class moviesDataset(torch.utils.data.Dataset):
-    def __init__(self, csv_file, transform=None, genres: List[str] = None):
+class MoviesDataset(torch.utils.data.Dataset):
+    def __init__(self, csv_file="./data/movies.txt", transform=None, genres: List[str] = None):
         self.data = pd.read_csv(csv_file, delimiter=" ::: ", header=None, index_col=0, engine='python')
         self.data.columns = ['Title', 'Genre', 'Synopsis']
         if genres:
@@ -16,15 +16,13 @@ class moviesDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, get_synopsis=False):
         sample = self.data.iloc[idx, :]
         if self.transform:
             sample = self.transform(sample)
         return sample
 
-    @staticmethod
-    def get_synopsis_from_sample(sample):
-        return sample['Synopsis']
+
 
 
 class customized_20newsgroups(torch.utils.data.Dataset):
