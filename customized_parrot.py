@@ -4,15 +4,17 @@ import warnings
 from typing import List, Tuple
 from transformers import AutoModelForSeq2SeqLM
 from transformers import T5ForConditionalGeneration
+from datasets import MoviesDataset, FoodReviewsDataset
 import re
-
+from customized_one_line_summary import OneLineSummary
+from transformers import pipeline
+import dill
+import os
+from utils import remove_words_without_content
 
 class CustomizedParrot(Parrot):
     def __init__(self, model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=False, encoder_layer=1):
         super().__init__(model_tag=model_tag, use_gpu=use_gpu)
-        # self.end_of_model = AutoModelForSeq2SeqLM.from_pretrained(model_tag, use_auth_token=False,
-        #                                                           num_hidden_layers=encoder_layer)
-        # self.encoder_layer = encoder_layer
 
     def get_avg_embedding(self, input_phrases, use_gpu=False):
         if use_gpu:
@@ -24,16 +26,19 @@ class CustomizedParrot(Parrot):
         encoder = self.model.get_encoder()
         input_phrases = [re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase) for input_phrase in input_phrases]
         input_phrases = ["paraphrase: " + input_phrase for input_phrase in input_phrases]
-        input_ids = self.tokenizer.batch_encode_plus(input_phrases, return_tensors='pt').data["input_ids"]
+        input_ids = \
+            self.tokenizer.batch_encode_plus(input_phrases, padding=True, truncation=True, return_tensors='pt').data[
+                "input_ids"]
         input_ids = input_ids.to(device)
 
         encoder_outputs = encoder(input_ids)
-        changed_hidden_state = torch.mean(encoder_outputs.last_hidden_state, dim=1).unsqueeze(dim=1)
+        changed_hidden_states = torch.mean(encoder_outputs.last_hidden_state, dim=0).unsqueeze(dim=0)
+        changed_hidden_state = torch.mean(changed_hidden_states, dim=1).unsqueeze(dim=1)
         encoder_outputs.last_hidden_state = changed_hidden_state
 
         return encoder_outputs
 
-    def generate_from_latent(self, input_phrase=None, encoder_outputs=None, use_gpu=False, max_length=64):
+    def generate_from_latent(self, encoder_outputs=None, use_gpu=False):
         if use_gpu:
             device = "cuda:0"
         else:
@@ -42,15 +47,56 @@ class CustomizedParrot(Parrot):
         self.model = self.model.to(device)
 
         preds = self.model.generate(
-            input_phrase,
+            None,
             do_sample=False,
-            max_length=max_length,
+            max_length=64,
             top_k=50,
-            top_p=0.99,
-            early_stopping=True,
+            top_p=0.9,
+            early_stopping=False,
             num_return_sequences=1,
             encoder_outputs=encoder_outputs,
             repetition_penalty=1.5,
+            length_penalty=1.0,
+        )
+
+        paraphrases = set()
+
+        for pred in preds:
+            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True,).lower()
+            gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
+            paraphrases.add(gen_pp)
+
+        return list(paraphrases)
+
+    def shorten_augment(self, input_phrase, use_gpu=False, diversity_ranker="levenshtein", do_diverse=False,
+                        max_return_phrases=10, max_length=16, adequacy_threshold=0.90, fluency_threshold=0.90):
+        if use_gpu:
+            device = "cuda:0"
+        else:
+            device = "cpu"
+
+        self.model = self.model.to(device)
+
+        import re
+
+        save_phrase = input_phrase
+        if len(input_phrase) >= max_length:
+            max_length += 32
+
+        input_phrase = re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase)
+        input_phrase = "paraphrase: " + input_phrase
+        input_ids = self.tokenizer.encode(input_phrase, return_tensors='pt')
+        input_ids = input_ids.to(device)
+        preds = self.model.generate(
+            input_ids,
+            do_sample=False,
+            max_length=max_length,
+            top_k=50,
+            top_p=0.95,
+            early_stopping=True,
+            num_return_sequences=1,
+            repetition_penalty=1.5,
+            length_penalty=0,
         )
 
         paraphrases = set()
@@ -60,12 +106,46 @@ class CustomizedParrot(Parrot):
             gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
             paraphrases.add(gen_pp)
 
-        return list(paraphrases)
+        adequacy_filtered_phrases = self.adequacy_score.filter(input_phrase, paraphrases, adequacy_threshold, device)
+        if len(adequacy_filtered_phrases) > 0:
+            fluency_filtered_phrases = self.fluency_score.filter(adequacy_filtered_phrases, fluency_threshold, device)
+            if len(fluency_filtered_phrases) > 0:
+                diversity_scored_phrases = self.diversity_score.rank(input_phrase, fluency_filtered_phrases,
+                                                                     diversity_ranker)
+                para_phrases = []
+                for para_phrase, diversity_score in diversity_scored_phrases.items():
+                    para_phrases.append((para_phrase, diversity_score))
+                para_phrases.sort(key=lambda x: x[1], reverse=True)
+                return para_phrases
+            else:
+                return [(save_phrase, 0)]
 
 
 if __name__ == "__main__":
+    # movie_dataset = MoviesDataset(genres=["comedy"])
+    # movies_synopsis = [movie_dataset[i]["Synopsis"] for i in range(0, 100)]
+    facebook_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+    one_line_summary = OneLineSummary()
     parrot = CustomizedParrot()
-    embeds = parrot.get_avg_embedding(["I want to go to the beach"])
-    print(parrot.generate_from_latent(encoder_outputs=embeds))
-    # parrot.generate_from_latent("I am a student.")
-    # parrot.rephrase(["Can you recommed some upscale restaurants in Newyork?"])
+    food_reviews_dataset = FoodReviewsDataset()
+    og = list(food_reviews_dataset[0:100])
+    print(og)
+    # Shorten with one_line_summary
+    # shorten_phrases = one_line_summary.get_one_line_summaries(og)
+    filename = "shorten_phrases_facebook_amazon_food_100.pkl"
+    if os.path.exists(filename):
+        with open(filename, "rb") as f:
+            shorten_phrases = dill.load(f)
+    else:
+        shorten_phrases = facebook_summarizer(og, max_length=32, min_length=0, do_sample=False)
+        shorten_phrases = [shorten_phrase["summary_text"] for shorten_phrase in shorten_phrases]
+        with open(filename, "wb") as f:
+            dill.dump(shorten_phrases, f)
+
+    print(shorten_phrases)
+    # print(input_summaries[0])
+    # Shorten with rephrase
+    embeds = parrot.get_avg_embedding(shorten_phrases)
+    generated_sentences = parrot.generate_from_latent(encoder_outputs=embeds)
+    generated_sentences = list(map(lambda x: remove_words_without_content(x), generated_sentences))
+    print(generated_sentences)

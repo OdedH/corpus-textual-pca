@@ -24,6 +24,19 @@ class OneLineSummary(ABC):
         self.model = self.model.to(self.device)
         self.encode = self.model.get_encoder()
 
+    def get_one_line_summaries(self, input_phrases):
+        import re
+        input_phrases = [re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase) for input_phrase in input_phrases]
+        input_phrases = ["summarize: " + sentence for sentence in input_phrases]
+        input_ids = self.tokenizer.batch_encode_plus(input_phrases, padding=True, truncation=True, return_tensors='pt').data[
+            "input_ids"]
+        generated_ids = self.model.generate(input_ids=input_ids, num_beams=1, do_sample=False, max_length=64, repetition_penalty=2.5,
+                                       length_penalty=0, early_stopping=True, num_return_sequences=1)
+        preds = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=True) for g in
+                 generated_ids]
+        return preds
+
+
 
     def get_avg_encode_outputs(self, sentences):
         sentences = ["summarize: " + sentence for sentence in sentences]
