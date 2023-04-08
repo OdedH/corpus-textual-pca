@@ -93,7 +93,7 @@ class CustomizedParrot(Parrot):
             num_return_sequences=256,
             encoder_outputs=encoder_outputs,
             repetition_penalty=1.5,
-            length_penalty=0,
+            length_penalty=2.0,
         )
 
         paraphrases = set()
