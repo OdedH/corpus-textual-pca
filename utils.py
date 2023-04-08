@@ -7,11 +7,25 @@ import re
 
 
 def remove_words_without_content(caption):
-    print("-----------------BEFORE STOPWORDS-----------------")
-    print(caption)
     stop_words = set(STOPWORDS).union(set(stopwords.words('english')))
     caption = " ".join([word for word in caption.split() if word not in stop_words])
     return " ".join([word for word in caption.split() if wn.synsets(word) and len(word) > 2])
+
+
+def remove_words_empty(caption):
+    return " ".join([word for word in caption.split() if word])
+
+
+def remove_mean_sentence_words(caption, avg_sentence):
+    return " ".join([word for word in caption.split() if word not in avg_sentence])
+
+
+def postprocess_caption(caption: str, avg_sentence=None):
+    caption = remove_words_without_content(caption)
+    if not avg_sentence:
+        caption = remove_mean_sentence_words(caption, avg_sentence)
+    caption = remove_words_empty(caption)
+    return caption
 
 
 def project_sentences_for_matching(dataset, batch_size, number_of_batches, tokenizer, encoder, device):
@@ -32,4 +46,3 @@ def project_sentences_for_matching(dataset, batch_size, number_of_batches, token
         if number_of_batches == 0:
             break
     return torch.cat(acc).to(device)
-

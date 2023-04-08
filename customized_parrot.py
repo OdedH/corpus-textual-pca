@@ -11,10 +11,16 @@ from transformers import pipeline
 import dill
 import os
 from utils import remove_words_without_content
+from nltk.corpus import wordnet as wn
+from nltk.corpus import stopwords
+from gensim.parsing.preprocessing import STOPWORDS
+import random
 
 class CustomizedParrot(Parrot):
     def __init__(self, model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=False, encoder_layer=1):
         super().__init__(model_tag=model_tag, use_gpu=use_gpu)
+        self.avg_sentence = None
+        self.avg_encoder_outputs = None
 
     def get_avg_embedding(self, input_phrases, use_gpu=False):
         if use_gpu:
@@ -36,9 +42,10 @@ class CustomizedParrot(Parrot):
         changed_hidden_state = torch.mean(changed_hidden_states, dim=1).unsqueeze(dim=1)
         encoder_outputs.last_hidden_state = changed_hidden_state
 
+        self.avg_encoder_outputs = encoder_outputs
         return encoder_outputs
 
-    def generate_from_latent(self, encoder_outputs=None, use_gpu=False):
+    def get_avg_sentence(self, encoder_outputs=None, use_gpu=False):
         if use_gpu:
             device = "cuda:0"
         else:
@@ -51,7 +58,6 @@ class CustomizedParrot(Parrot):
             do_sample=False,
             max_length=64,
             top_k=50,
-            top_p=0.9,
             early_stopping=False,
             num_return_sequences=1,
             encoder_outputs=encoder_outputs,
@@ -62,10 +68,40 @@ class CustomizedParrot(Parrot):
         paraphrases = set()
 
         for pred in preds:
-            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True,).lower()
+            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True, ).lower()
             gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
             paraphrases.add(gen_pp)
 
+        self.avg_sentence = list(paraphrases)[0]
+        return self.avg_sentence
+
+    def generate_from_latent(self, encoder_outputs=None, use_gpu=False):
+        if use_gpu:
+            device = "cuda:0"
+        else:
+            device = "cpu"
+
+        self.model = self.model.to(device)
+
+        preds = self.model.generate(
+            None,
+            do_sample=True,
+            max_length=12,
+            top_k=256,
+            top_p=0.9,
+            early_stopping=False,
+            num_return_sequences=256,
+            encoder_outputs=encoder_outputs,
+            repetition_penalty=1.5,
+            length_penalty=0,
+        )
+
+        paraphrases = set()
+
+        for pred in preds:
+            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True, ).lower()
+            gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
+            paraphrases.add(gen_pp)
         return list(paraphrases)
 
     def shorten_augment(self, input_phrase, use_gpu=False, diversity_ranker="levenshtein", do_diverse=False,
@@ -122,16 +158,13 @@ class CustomizedParrot(Parrot):
 
 
 if __name__ == "__main__":
-    # movie_dataset = MoviesDataset(genres=["comedy"])
-    # movies_synopsis = [movie_dataset[i]["Synopsis"] for i in range(0, 100)]
+    torch.random.manual_seed(0)
+    random.seed(0)
     facebook_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
     one_line_summary = OneLineSummary()
     parrot = CustomizedParrot()
     food_reviews_dataset = FoodReviewsDataset()
     og = list(food_reviews_dataset[0:100])
-    print(og)
-    # Shorten with one_line_summary
-    # shorten_phrases = one_line_summary.get_one_line_summaries(og)
     filename = "shorten_phrases_facebook_amazon_food_100.pkl"
     if os.path.exists(filename):
         with open(filename, "rb") as f:
@@ -141,10 +174,6 @@ if __name__ == "__main__":
         shorten_phrases = [shorten_phrase["summary_text"] for shorten_phrase in shorten_phrases]
         with open(filename, "wb") as f:
             dill.dump(shorten_phrases, f)
-
-    print(shorten_phrases)
-    # print(input_summaries[0])
-    # Shorten with rephrase
     embeds = parrot.get_avg_embedding(shorten_phrases)
     generated_sentences = parrot.generate_from_latent(encoder_outputs=embeds)
     generated_sentences = list(map(lambda x: remove_words_without_content(x), generated_sentences))
