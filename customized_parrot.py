@@ -1,22 +1,16 @@
 from parrot import Parrot
 import torch
-import warnings
-from typing import List, Tuple
-from transformers import AutoModelForSeq2SeqLM
-from transformers import T5ForConditionalGeneration
 from datasets import MoviesDataset, FoodReviewsDataset
 import re
 from customized_one_line_summary import OneLineSummary
 from transformers import pipeline
 import dill
 import os
-from utils import remove_words_without_content
-from nltk.corpus import wordnet as wn
-from nltk.corpus import stopwords
-from gensim.parsing.preprocessing import STOPWORDS
+from utils import remove_words_without_content, postprocess_phrases
 import random
 
-class CustomizedParrot(Parrot):
+
+class ParrotTextualPCA(Parrot):
     def __init__(self, model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=False, encoder_layer=1):
         super().__init__(model_tag=model_tag, use_gpu=use_gpu)
         self.avg_sentence = None
@@ -156,25 +150,11 @@ class CustomizedParrot(Parrot):
             else:
                 return [(save_phrase, 0)]
 
+    @staticmethod
+    def remove_empty_phrases(phrases):
+        return [phrase for phrase in phrases if phrase]
 
-if __name__ == "__main__":
-    torch.random.manual_seed(0)
-    random.seed(0)
-    facebook_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    one_line_summary = OneLineSummary()
-    parrot = CustomizedParrot()
-    food_reviews_dataset = FoodReviewsDataset()
-    og = list(food_reviews_dataset[0:100])
-    filename = "shorten_phrases_facebook_amazon_food_100.pkl"
-    if os.path.exists(filename):
-        with open(filename, "rb") as f:
-            shorten_phrases = dill.load(f)
-    else:
-        shorten_phrases = facebook_summarizer(og, max_length=32, min_length=0, do_sample=False)
-        shorten_phrases = [shorten_phrase["summary_text"] for shorten_phrase in shorten_phrases]
-        with open(filename, "wb") as f:
-            dill.dump(shorten_phrases, f)
-    embeds = parrot.get_avg_embedding(shorten_phrases)
-    generated_sentences = parrot.generate_from_latent(encoder_outputs=embeds)
-    generated_sentences = list(map(lambda x: remove_words_without_content(x), generated_sentences))
-    print(generated_sentences)
+    @staticmethod
+    def remove_mean_sentence_words(caption, avg_sentence):
+        return " ".join([word for word in caption.split() if word not in avg_sentence.split()])
+

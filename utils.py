@@ -12,20 +12,20 @@ def remove_words_without_content(caption):
     return " ".join([word for word in caption.split() if wn.synsets(word) and len(word) > 2])
 
 
-def remove_words_empty(caption):
-    return " ".join([word for word in caption.split() if word])
+def remove_empty_phrases(phrases):
+    return [phrase for phrase in phrases if phrase]
 
 
 def remove_mean_sentence_words(caption, avg_sentence):
-    return " ".join([word for word in caption.split() if word not in avg_sentence])
+    return " ".join([word for word in caption.split() if word not in avg_sentence.split()])
 
 
-def postprocess_caption(caption: str, avg_sentence=None):
-    caption = remove_words_without_content(caption)
-    if not avg_sentence:
-        caption = remove_mean_sentence_words(caption, avg_sentence)
-    caption = remove_words_empty(caption)
-    return caption
+def postprocess_phrases(phrases: list[str], avg_sentence=None):
+    phrases = list(map(lambda x: remove_words_without_content(x), phrases))
+    if avg_sentence:
+        phrases = list(map(lambda x: remove_mean_sentence_words(x, avg_sentence), phrases))
+    phrases = remove_empty_phrases(phrases)
+    return phrases
 
 
 def project_sentences_for_matching(dataset, batch_size, number_of_batches, tokenizer, encoder, device):

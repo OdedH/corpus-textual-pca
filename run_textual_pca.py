@@ -1,31 +1,52 @@
 from parrot import Parrot
 import torch
 import warnings
-warnings.filterwarnings("ignore")
+import random
+import torch
+from customized_parrot import ParrotTextualPCA
+from datasets import FoodReviewsDataset
+from transformers import pipeline
+import dill
+import os
+from utils import remove_words_without_content, postprocess_phrases
 
-###
-# First try, using parrot T5 paraphraser: https://huggingface.co/prithivida/parrot_paraphraser_on_T5
-# There also more paraphraser at huggingface spaces at the link above
-# Paraphraser makes sense since we want encoder-decoder that retain the meaning of the text
-###
 
-def random_state(seed):
-  torch.manual_seed(seed)
-  if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(seed)
+def summarize_with_facebook(texts_to_summarize, file_name=None):
+    facebook_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+    if file_name:
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                shorten_phrases = dill.load(f)
+                return shorten_phrases
 
-random_state(1234)
+    shorten_phrases = facebook_summarizer(texts_to_summarize, max_length=32, min_length=0, do_sample=False)
+    shorten_phrases = [shorten_phrase["summary_text"] for shorten_phrase in shorten_phrases]
 
-parrot = Parrot(model_tag="prithivida/parrot_paraphraser_on_T5")
+    if file_name:
+        with open(filename, "wb") as f:
+            dill.dump(shorten_phrases, f)
 
-phrases = ["Can you recommed some upscale restaurants in Newyork?",
-           "What are the famous places we should not miss in Russia?"
-]
-parrot.rephrase("testing")
-for phrase in phrases:
-  print("-"*100)
-  print("Input_phrase: ", phrase)
-  print("-"*100)
-  para_phrases = parrot.augment(input_phrase=phrase)
-  for para_phrase in para_phrases:
-   print(para_phrase)
+    return shorten_phrases
+
+
+if __name__ == "__main__":
+    # Setup
+    torch.random.manual_seed(0)
+    random.seed(0)
+
+    parrot = ParrotTextualPCA()
+
+    # Dataset
+    food_reviews_dataset = FoodReviewsDataset()
+    original_texts = list(food_reviews_dataset[0:100])
+
+    # Summarize
+    filename = "shorten_phrases_facebook_amazon_food_100.pkl"
+    shorten_phrases = summarize_with_facebook(original_texts, filename)
+
+    embeds = parrot.get_avg_embedding(shorten_phrases)
+    generated_sentences = parrot.generate_from_latent(encoder_outputs=embeds)
+    generated_sentences = postprocess_phrases(generated_sentences, "food")
+    # generated_sentences = list(map(lambda x: remove_words_without_content(x), generated_sentences))
+
+    print(generated_sentences)
