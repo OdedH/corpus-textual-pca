@@ -1,5 +1,3 @@
-from parrot import Parrot
-import torch
 import warnings
 import random
 import torch
@@ -8,7 +6,6 @@ from datasets import FoodReviewsDataset
 from transformers import pipeline
 import dill
 import os
-from utils import remove_words_without_content, postprocess_phrases
 
 
 def summarize_with_facebook(texts_to_summarize, file_name=None):
@@ -34,7 +31,7 @@ if __name__ == "__main__":
     torch.random.manual_seed(0)
     random.seed(0)
 
-    parrot = ParrotTextualPCA()
+    parrot_textual_pca = ParrotTextualPCA()
 
     # Dataset
     food_reviews_dataset = FoodReviewsDataset()
@@ -44,9 +41,20 @@ if __name__ == "__main__":
     filename = "shorten_phrases_facebook_amazon_food_100.pkl"
     shorten_phrases = summarize_with_facebook(original_texts, filename)
 
-    embeds = parrot.get_avg_embedding(shorten_phrases)
-    generated_sentences = parrot.generate_from_latent(encoder_outputs=embeds)
-    generated_sentences = postprocess_phrases(generated_sentences, "food")
-    # generated_sentences = list(map(lambda x: remove_words_without_content(x), generated_sentences))
+    # Embeds
+    # texts_embeds = parrot_textual_pca.project_phrases_for_matching(shorten_phrases, 20)
+    # mean_embeds = parrot_textual_pca.get_avg_embedding(shorten_phrases)
 
-    print(generated_sentences)
+    # mean sentence
+    # mean_sentence = parrot_textual_pca.get_avg_sentence(embeds)
+    # print(f"mean sentence: {mean_sentence}")
+    parrot_textual_pca.mean_phrase = "food"
+
+    # Principal Phrases
+    principal_phrases = parrot_textual_pca.generate_principal_phrases(shorten_texts=shorten_phrases, num_of_phrases=6,
+                                                                      mean_phrase="food")
+
+    # generated_sentences = parrot_textual_pca.generate_from_latent(encoder_outputs=mean_embeds)
+    # generated_sentences = parrot_textual_pca.postprocess_phrases(generated_sentences)
+
+    # print(generated_sentences)

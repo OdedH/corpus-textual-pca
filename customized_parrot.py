@@ -6,30 +6,38 @@ from customized_one_line_summary import OneLineSummary
 from transformers import pipeline
 import dill
 import os
-from utils import remove_words_without_content, postprocess_phrases
 import random
+from nltk.corpus import wordnet as wn
+from nltk.corpus import stopwords
+from gensim.parsing.preprocessing import STOPWORDS
+from torch.utils.data import DataLoader
+from typing import List
 
 
 class ParrotTextualPCA(Parrot):
-    def __init__(self, model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=False, encoder_layer=1):
+    def __init__(self, model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=False, texts_encoder=None):
         super().__init__(model_tag=model_tag, use_gpu=use_gpu)
-        self.avg_sentence = None
+        self.mean_phrase = None
         self.avg_encoder_outputs = None
-
-    def get_avg_embedding(self, input_phrases, use_gpu=False):
-        if use_gpu:
-            device = "cuda:0"
+        self.prev_principal_phrases = []
+        if texts_encoder is None:
+            self.texts_encoder = self.model.get_encoder()
         else:
-            device = "cpu"
+            self.texts_encoder = texts_encoder
+        self.texts_projections = None
+        self.mean_embedding = None
+        self.device = "cuda" if use_gpu else "cpu"
 
-        self.model = self.model.to(device)
+    def get_avg_embedding(self, input_phrases, device="cuda"):
+        self.device = device
+        self.model = self.model.to(self.device)
         encoder = self.model.get_encoder()
         input_phrases = [re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase) for input_phrase in input_phrases]
         input_phrases = ["paraphrase: " + input_phrase for input_phrase in input_phrases]
         input_ids = \
             self.tokenizer.batch_encode_plus(input_phrases, padding=True, truncation=True, return_tensors='pt').data[
                 "input_ids"]
-        input_ids = input_ids.to(device)
+        input_ids = input_ids.to(self.device)
 
         encoder_outputs = encoder(input_ids)
         changed_hidden_states = torch.mean(encoder_outputs.last_hidden_state, dim=0).unsqueeze(dim=0)
@@ -66,16 +74,15 @@ class ParrotTextualPCA(Parrot):
             gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
             paraphrases.add(gen_pp)
 
-        self.avg_sentence = list(paraphrases)[0]
-        return self.avg_sentence
+        self.mean_phrase = self.postprocess_phrases([list(paraphrases)[0]])[0]
+        return self.mean_phrase
 
-    def generate_from_latent(self, encoder_outputs=None, use_gpu=False):
-        if use_gpu:
-            device = "cuda:0"
-        else:
-            device = "cpu"
+    def generate_from_latent(self, encoder_outputs=None, num_candidates=512, device="cpu"):
+        self.device = device
 
         self.model = self.model.to(device)
+        if encoder_outputs:
+            encoder_outputs.last_hidden_state = encoder_outputs.last_hidden_state.to(device)
 
         preds = self.model.generate(
             None,
@@ -84,7 +91,7 @@ class ParrotTextualPCA(Parrot):
             top_k=256,
             top_p=0.9,
             early_stopping=False,
-            num_return_sequences=256,
+            num_return_sequences=num_candidates,
             encoder_outputs=encoder_outputs,
             repetition_penalty=1.5,
             length_penalty=2.0,
@@ -155,6 +162,118 @@ class ParrotTextualPCA(Parrot):
         return [phrase for phrase in phrases if phrase]
 
     @staticmethod
-    def remove_mean_sentence_words(caption, avg_sentence):
-        return " ".join([word for word in caption.split() if word not in avg_sentence.split()])
+    def remove_words_without_content(caption):
+        stop_words = set(STOPWORDS).union(set(stopwords.words('english')))
+        caption = " ".join([word for word in caption.split() if word not in stop_words])
+        return " ".join([word for word in caption.split() if wn.synsets(word) and len(word) > 2])
 
+    def remove_mean_sentence_words(self, caption):
+        return " ".join([word for word in caption.split() if word not in self.mean_phrase.split()])
+
+    def postprocess_phrases(self, phrases: list[str]):
+        phrases = list(map(lambda x: self.remove_words_without_content(x), phrases))
+        if self.mean_phrase:
+            phrases = list(map(lambda x: self.remove_mean_sentence_words(x), phrases))
+        phrases = self.remove_empty_phrases(phrases)
+        phrases = list(set(phrases))
+        return phrases
+
+    def encode_text(self, input_phrases, texts_encoder=None, tokenizer=None):
+
+        if not texts_encoder:
+            texts_encoder = self.texts_encoder
+        if not tokenizer:
+            tokenizer = self.tokenizer
+
+        input_phrases = [re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase) for input_phrase in input_phrases]
+        input_phrases = ["paraphrase: " + input_phrase for input_phrase in input_phrases]
+        input_ids = \
+            tokenizer.batch_encode_plus(input_phrases, padding=True, truncation=True,
+                                        return_tensors='pt').data[
+                "input_ids"]
+        return texts_encoder(input_ids.to(texts_encoder.base_model.device))
+
+    def project_phrases_for_matching(self, texts: list[str], batch_size, texts_encoder=None, tokenizer=None,
+                                     device="cuda"):
+        """This is a helper function for weaker GPUs
+        To support many kinds of embedders"""
+
+        def chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
+
+        if not texts_encoder:
+            texts_encoder = self.texts_encoder
+        if not tokenizer:
+            tokenizer = self.tokenizer
+
+        acc = []
+        texts_encoder = texts_encoder.to(device)
+        for chunk in chunks(texts, batch_size):
+            with torch.no_grad():
+                encoder_outputs = self.encode_text(chunk, texts_encoder, tokenizer)
+                projected_data = torch.mean(encoder_outputs.last_hidden_state, dim=1)
+                acc.append(projected_data.to("cpu"))
+                torch.cuda.empty_cache()
+        self.texts_projections = torch.cat(acc).to(device)
+        return self.texts_projections
+
+    def generate_principal_phrases(self, shorten_texts: List[str], num_of_phrases: int, mean_phrase,
+                                   texts_projections=None,
+                                   texts_encoder=None, mean_encoder_outputs=None,
+                                   device="cuda"):
+        """We allow injecting encoder, text projections etc. for efficiency"""
+        if texts_encoder is None:
+            texts_encoder = self.texts_encoder
+        if texts_projections is None:
+            if self.texts_projections is None:
+                self.texts_projections = self.project_phrases_for_matching(shorten_texts, 20, texts_encoder)
+            texts_projections = self.texts_projections
+        if mean_encoder_outputs is None:
+            mean_encoder_outputs = self.get_avg_embedding(shorten_texts)
+
+        # Mean Sentence
+        mean_phrase_encoding = self.encode_text([mean_phrase], texts_encoder, self.tokenizer)
+        mean_phrase_encoding = torch.mean(mean_phrase_encoding.last_hidden_state, dim=1).to(device)
+        mean_phrase_encoding = mean_phrase_encoding / torch.norm(mean_phrase_encoding, dim=-1, keepdim=True)
+        # Text projections
+        texts_projections = texts_projections / torch.norm(texts_projections, dim=-1, keepdim=True).to(device)
+        texts_projections = texts_projections - mean_phrase_encoding
+
+        candidate_sentences = self.generate_from_latent(encoder_outputs=mean_encoder_outputs)
+        candidate_sentences = self.postprocess_phrases(candidate_sentences)
+        candidate_sentences_embeddings = self.encode_text(candidate_sentences, texts_encoder, self.tokenizer)
+        candidate_sentences_embeddings = torch.mean(candidate_sentences_embeddings.last_hidden_state, dim=1).to(device)
+        # Var
+        variance = self.calc_variance_per_suggestion(candidate_sentences_embeddings, texts_projections)
+        # Ortho
+        if not self.prev_principal_phrases:
+            ortho = torch.zeros(len(candidate_sentences))
+        else:
+            previous_phrases_embeddings = \
+                self.encode_text(self.prev_principal_phrases, texts_encoder, self.tokenizer)
+            ortho = self.get_orthogonal_delta_penalty(candidate_sentences_embeddings, previous_phrases_embeddings)
+
+    def calc_variance_per_suggestion(self, candidate_sentences_embeddings, texts_projections):
+        normed_similarity_scores = texts_projections @ candidate_sentences_embeddings.T
+        mu = torch.sum(normed_similarity_scores, dim=0) / normed_similarity_scores.size(0)
+        return torch.sum(torch.square(normed_similarity_scores - mu), dim=0)
+
+
+    def get_orthogonal_delta_penalty(self, candidate_sentences_embeddings, previous_phrases_embeddings):
+        # We want the orthogonality penalty to be depended on the current sentence only
+
+        prev_penalty = self.calc_orthogonality_penalty(previous_phrases_embeddings)
+        penalty_per_candidate = []
+        for i in range(candidate_sentences_embeddings.shape[0]):
+            vectors = torch.vstack([candidate_sentences_embeddings[i].unsqueeze(0), previous_phrases_embeddings])
+            ortho_penalty = self.calc_orthogonality_penalty(vectors)
+            penalty_per_candidate.append(ortho_penalty - prev_penalty)
+        penalty_per_candidate = torch.tensor(penalty_per_candidate).to(self.device)
+        return penalty_per_candidate
+
+
+    def calc_orthogonality_penalty(self, vectors):
+        count_vectors = vectors.size(0)
+        eye = torch.eye(count_vectors).to(self.device)
+        return torch.dist(vectors @ vectors.T, eye)
