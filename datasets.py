@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 
 class MoviesDataset(Dataset):
-    def __init__(self, csv_file="./data/movies.txt", transform=None, genres: List[str] = None):
+    def __init__(self, csv_file="./data/movies/movies.txt", transform=None, genres: List[str] = None):
         self.data = pd.read_csv(csv_file, delimiter=" ::: ", header=None, index_col=0, engine='python')
         self.data.columns = ['Title', 'Genre', 'Synopsis']
         if genres:

@@ -52,7 +52,8 @@ class ParrotTextualPCA(Parrot):
         self.model = self.model.to(device)
         preds = self.model.generate(
             None,
-            do_sample=False,
+            do_sample=True,
+            top_p=0.9,
             max_length=64,
             top_k=50,
             early_stopping=False,
