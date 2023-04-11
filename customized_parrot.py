@@ -77,7 +77,7 @@ class ParrotTextualPCA(Parrot):
         self.mean_phrase = self.postprocess_phrases([list(paraphrases)[0]])[0]
         return self.mean_phrase
 
-    def generate_from_latent(self, encoder_outputs=None, num_candidates=512, device="cpu"):
+    def generate_from_latent(self, encoder_outputs=None, num_candidates=512, device="cuda"):
         self.device = device
 
         self.model = self.model.to(device)
@@ -215,14 +215,17 @@ class ParrotTextualPCA(Parrot):
                 projected_data = torch.mean(encoder_outputs.last_hidden_state, dim=1)
                 acc.append(projected_data.to("cpu"))
                 torch.cuda.empty_cache()
-        self.texts_projections = torch.cat(acc).to(device)
-        return self.texts_projections
+        texts_projections = torch.cat(acc).to(device)
+        texts_projections = texts_projections / torch.norm(texts_projections, dim=1, keepdim=True)
+        return texts_projections
 
     def generate_principal_phrases(self, shorten_texts: List[str], num_of_phrases: int, mean_phrase,
                                    texts_projections=None,
                                    texts_encoder=None, mean_encoder_outputs=None,
+                                   variance_coefficient=1.0, orthogonality_coefficient=-10.0,
                                    device="cuda"):
         """We allow injecting encoder, text projections etc. for efficiency"""
+        self.device = device
         if texts_encoder is None:
             texts_encoder = self.texts_encoder
         if texts_projections is None:
@@ -233,26 +236,30 @@ class ParrotTextualPCA(Parrot):
             mean_encoder_outputs = self.get_avg_embedding(shorten_texts)
 
         # Mean Sentence
-        mean_phrase_encoding = self.encode_text([mean_phrase], texts_encoder, self.tokenizer)
-        mean_phrase_encoding = torch.mean(mean_phrase_encoding.last_hidden_state, dim=1).to(device)
-        mean_phrase_encoding = mean_phrase_encoding / torch.norm(mean_phrase_encoding, dim=-1, keepdim=True)
+        mean_phrase_encoding = self.project_phrases_for_matching([mean_phrase], 1, texts_encoder)
         # Text projections
-        texts_projections = texts_projections / torch.norm(texts_projections, dim=-1, keepdim=True).to(device)
         texts_projections = texts_projections - mean_phrase_encoding
 
-        candidate_sentences = self.generate_from_latent(encoder_outputs=mean_encoder_outputs)
-        candidate_sentences = self.postprocess_phrases(candidate_sentences)
-        candidate_sentences_embeddings = self.encode_text(candidate_sentences, texts_encoder, self.tokenizer)
-        candidate_sentences_embeddings = torch.mean(candidate_sentences_embeddings.last_hidden_state, dim=1).to(device)
-        # Var
-        variance = self.calc_variance_per_suggestion(candidate_sentences_embeddings, texts_projections)
-        # Ortho
-        if not self.prev_principal_phrases:
-            ortho = torch.zeros(len(candidate_sentences))
-        else:
-            previous_phrases_embeddings = \
-                self.encode_text(self.prev_principal_phrases, texts_encoder, self.tokenizer)
-            ortho = self.get_orthogonal_delta_penalty(candidate_sentences_embeddings, previous_phrases_embeddings)
+        candidate_phrases = self.generate_from_latent(encoder_outputs=mean_encoder_outputs)
+        candidate_phrases = self.postprocess_phrases(candidate_phrases)
+        candidate_phrases_embeddings = self.project_phrases_for_matching(candidate_phrases, 20, texts_encoder)
+        for i in range(num_of_phrases):
+            # Var
+            variance = self.calc_variance_per_suggestion(candidate_phrases_embeddings, texts_projections)
+
+            # Ortho
+            if not self.prev_principal_phrases:
+                ortho = torch.zeros(len(candidate_phrases)).to(self.device)
+            else:
+                previous_phrases_embeddings = \
+                    self.project_phrases_for_matching(self.prev_principal_phrases, 20, texts_encoder)
+                ortho = self.get_orthogonal_delta_penalty(candidate_phrases_embeddings, previous_phrases_embeddings)
+            # Score
+            score = variance_coefficient * variance + orthogonality_coefficient * ortho
+            max_index = torch.argmax(score).item()
+            self.prev_principal_phrases.append(candidate_phrases[max_index])
+        return self.prev_principal_phrases
+
 
     def calc_variance_per_suggestion(self, candidate_sentences_embeddings, texts_projections):
         normed_similarity_scores = texts_projections @ candidate_sentences_embeddings.T
@@ -262,8 +269,7 @@ class ParrotTextualPCA(Parrot):
 
     def get_orthogonal_delta_penalty(self, candidate_sentences_embeddings, previous_phrases_embeddings):
         # We want the orthogonality penalty to be depended on the current sentence only
-
-        prev_penalty = self.calc_orthogonality_penalty(previous_phrases_embeddings)
+        prev_penalty = self.calc_orthogonality_penalty(previous_phrases_embeddings.to(self.device))
         penalty_per_candidate = []
         for i in range(candidate_sentences_embeddings.shape[0]):
             vectors = torch.vstack([candidate_sentences_embeddings[i].unsqueeze(0), previous_phrases_embeddings])

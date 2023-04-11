@@ -54,7 +54,4 @@ if __name__ == "__main__":
     principal_phrases = parrot_textual_pca.generate_principal_phrases(shorten_texts=shorten_phrases, num_of_phrases=6,
                                                                       mean_phrase="food")
 
-    # generated_sentences = parrot_textual_pca.generate_from_latent(encoder_outputs=mean_embeds)
-    # generated_sentences = parrot_textual_pca.postprocess_phrases(generated_sentences)
-
-    # print(generated_sentences)
+    print(f"principal phrases: {principal_phrases}")
