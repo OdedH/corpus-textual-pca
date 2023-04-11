@@ -47,14 +47,9 @@ class ParrotTextualPCA(Parrot):
         self.avg_encoder_outputs = encoder_outputs
         return encoder_outputs
 
-    def get_avg_sentence(self, encoder_outputs=None, use_gpu=False):
-        if use_gpu:
-            device = "cuda:0"
-        else:
-            device = "cpu"
-
+    def get_avg_sentence(self, encoder_outputs=None, device="cuda"):
+        self.device = device
         self.model = self.model.to(device)
-
         preds = self.model.generate(
             None,
             do_sample=False,

@@ -42,13 +42,12 @@ if __name__ == "__main__":
     shorten_phrases = summarize_with_facebook(original_texts, filename)
 
     # Embeds
-    # texts_embeds = parrot_textual_pca.project_phrases_for_matching(shorten_phrases, 20)
-    # mean_embeds = parrot_textual_pca.get_avg_embedding(shorten_phrases)
+    texts_embeds = parrot_textual_pca.project_phrases_for_matching(shorten_phrases, 20)
+    mean_embeds = parrot_textual_pca.get_avg_embedding(shorten_phrases)
 
     # mean sentence
-    # mean_sentence = parrot_textual_pca.get_avg_sentence(embeds)
-    # print(f"mean sentence: {mean_sentence}")
-    parrot_textual_pca.mean_phrase = "food"
+    mean_sentence = parrot_textual_pca.get_avg_sentence(mean_embeds)
+    print(f"mean sentence: {mean_sentence}")
 
     # Principal Phrases
     principal_phrases = parrot_textual_pca.generate_principal_phrases(shorten_texts=shorten_phrases, num_of_phrases=6,
