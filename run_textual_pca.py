@@ -37,7 +37,7 @@ if __name__ == "__main__":
     # food_reviews_dataset = FoodReviewsDataset()
     # movies_dataset = MoviesDataset(genres=["action"], transform=lambda x: x["Synopsis"])
     # emails_dataset = EmailsDataset(categories=["Science"], transform=lambda x: x["Content"])
-    news_dataset = Customized20Newsgroups()
+    news_dataset = Customized20Newsgroups(categories=["soc.religion.christian"])
 
     num_samples = 100
     title = "news_sport"
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     principal_phrases = parrot_textual_pca.generate_principal_phrases(shorten_texts=shorten_texts, num_of_phrases=5,
                                                                       mean_phrase=mean_phrase,
                                                                       variance_coefficient=1,
-                                                                      orthogonality_coefficient=-10.0,
+                                                                      orthogonality_coefficient=-3.0,
                                                                       # supports other projections
                                                                       texts_projections=None,
                                                                       # supports other encoders
