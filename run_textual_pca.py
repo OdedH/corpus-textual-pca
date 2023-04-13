@@ -40,7 +40,7 @@ if __name__ == "__main__":
     news_dataset = Customized20Newsgroups(categories=["soc.religion.christian"])
 
     num_samples = 100
-    title = "news_sport"
+    title = "soc.religion.christian"
     original_texts = list(news_dataset[0:num_samples])
 
     # Summarize
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     principal_phrases = parrot_textual_pca.generate_principal_phrases(shorten_texts=shorten_texts, num_of_phrases=5,
                                                                       mean_phrase=mean_phrase,
                                                                       variance_coefficient=1,
-                                                                      orthogonality_coefficient=-3.0,
+                                                                      orthogonality_coefficient=-1.0,
                                                                       # supports other projections
                                                                       texts_projections=None,
                                                                       # supports other encoders
