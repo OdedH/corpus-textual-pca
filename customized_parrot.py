@@ -70,7 +70,8 @@ class ParrotTextualPCA(Parrot):
             gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
             paraphrases.add(gen_pp)
 
-        self.mean_phrase = self.postprocess_phrases([list(paraphrases)[0]])[0]
+        mean_phrase = self.postprocess_phrases([list(paraphrases)[0]])[0]
+        self.mean_phrase = self.wordnet_merge_similar_words(mean_phrase)
         return self.mean_phrase
 
     def generate_from_latent(self, encoder_outputs=None, num_candidates=512, device="cuda"):
@@ -100,58 +101,6 @@ class ParrotTextualPCA(Parrot):
             gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
             paraphrases.add(gen_pp)
         return list(paraphrases)
-
-    def shorten_augment(self, input_phrase, use_gpu=False, diversity_ranker="levenshtein", do_diverse=False,
-                        max_return_phrases=10, max_length=16, adequacy_threshold=0.90, fluency_threshold=0.90):
-        if use_gpu:
-            device = "cuda:0"
-        else:
-            device = "cpu"
-
-        self.model = self.model.to(device)
-
-        import re
-
-        save_phrase = input_phrase
-        if len(input_phrase) >= max_length:
-            max_length += 32
-
-        input_phrase = re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase)
-        input_phrase = "paraphrase: " + input_phrase
-        input_ids = self.tokenizer.encode(input_phrase, return_tensors='pt')
-        input_ids = input_ids.to(device)
-        preds = self.model.generate(
-            input_ids,
-            do_sample=False,
-            max_length=max_length,
-            top_k=50,
-            top_p=0.95,
-            early_stopping=True,
-            num_return_sequences=1,
-            repetition_penalty=1.5,
-            length_penalty=0,
-        )
-
-        paraphrases = set()
-
-        for pred in preds:
-            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True).lower()
-            gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
-            paraphrases.add(gen_pp)
-
-        adequacy_filtered_phrases = self.adequacy_score.filter(input_phrase, paraphrases, adequacy_threshold, device)
-        if len(adequacy_filtered_phrases) > 0:
-            fluency_filtered_phrases = self.fluency_score.filter(adequacy_filtered_phrases, fluency_threshold, device)
-            if len(fluency_filtered_phrases) > 0:
-                diversity_scored_phrases = self.diversity_score.rank(input_phrase, fluency_filtered_phrases,
-                                                                     diversity_ranker)
-                para_phrases = []
-                for para_phrase, diversity_score in diversity_scored_phrases.items():
-                    para_phrases.append((para_phrase, diversity_score))
-                para_phrases.sort(key=lambda x: x[1], reverse=True)
-                return para_phrases
-            else:
-                return [(save_phrase, 0)]
 
     @staticmethod
     def remove_empty_phrases(phrases):
@@ -254,8 +203,7 @@ class ParrotTextualPCA(Parrot):
             score = variance_coefficient * variance + orthogonality_coefficient * ortho
             max_index = torch.argmax(score).item()
             self.prev_principal_phrases.append(candidate_phrases[max_index])
-        return self.prev_principal_phrases
-
+        return self.postprocess_phrases(self.prev_principal_phrases)
 
     def calc_variance_per_suggestion(self, candidate_sentences_embeddings, texts_projections):
         normed_similarity_scores = texts_projections @ candidate_sentences_embeddings.T
@@ -279,3 +227,131 @@ class ParrotTextualPCA(Parrot):
         count_vectors = vectors.size(0)
         eye = torch.eye(count_vectors).to(self.device)
         return torch.dist(vectors @ vectors.T, eye)
+
+
+    def wordnet_merge_similar_words(self, mean_phrase):
+        og_mean_phrase = mean_phrase
+        used_words = []
+        common_ancestors = {}
+        for word_i in og_mean_phrase.split():
+            if word_i in used_words: continue  # we want to enable more fine words after merger
+            if len(word_i) <= 2: continue  # If not a word
+            # sort indices
+            get_score_f = self.get_fine_similarity_func_from_word(word_i)
+            sorted_words = sorted(og_mean_phrase.split(),
+                                          key=lambda x: get_score_f(x),
+                                          reverse=True)
+            for word_k in sorted_words:
+                if word_k in used_words: continue
+                if word_i == word_k: continue
+                if len(word_k) <= 2: continue
+                if self.wordent_shortest_path_distance(word_i, word_k) <= 2:
+                    common_ancestor = self.wordnet_get_two_words_hyper(word_i, word_k)
+                    common_ancestors[word_i] = common_ancestor
+                    used_words.append(word_k)
+                    used_words.append(word_i)
+                    used_words.append(common_ancestor)
+        new_sentence = []
+        for word in og_mean_phrase.split():
+            if word in common_ancestors.keys():
+                new_sentence.append(common_ancestors[word])
+                continue
+            if word in used_words:
+                continue
+            new_sentence.append(word)
+        return " ".join(new_sentence)
+
+    @staticmethod
+    def get_fine_similarity_func_from_word(og_word):
+        def f(word_to_compare):
+            sl1 = wn.synsets(og_word)
+            sl2 = wn.synsets(word_to_compare)
+            max_score = 0
+            for word1 in sl1:
+                for word2 in sl2:
+                    if word1.name().split(".")[1] != word2.name().split(".")[1]: continue
+                    similarity = word1.lch_similarity(word2)
+                    if similarity is not None:
+                        max_score = max(max_score, similarity)
+            return max_score
+
+        return f
+
+    @staticmethod
+    def wordnet_get_two_words_hyper(word1, word2):
+        sl1 = wn.synsets(word1)
+        sl2 = wn.synsets(word2)
+        dist = 1000
+        common_ancestor = ""
+        for word1 in sl1:
+            for word2 in sl2:
+                path_dist = word1.shortest_path_distance(word2)
+                if path_dist is None: continue
+                if path_dist < dist:
+                    common_ancestor = word1.lowest_common_hypernyms(word2)[0]
+                    dist = word1.shortest_path_distance(word2)
+        return common_ancestor.name().split(".")[0]
+
+    @staticmethod
+    def wordent_shortest_path_distance(word1, word2):
+        sl1 = wn.synsets(word1)
+        sl2 = wn.synsets(word2)
+        min_path = 1000
+        for word1 in sl1:
+            for word2 in sl2:
+                dist = word1.shortest_path_distance(word2)
+                if dist is not None:
+                    min_path = min(min_path, dist)
+        return min_path
+
+    def shorten_augment(self, input_phrase, use_gpu=False, diversity_ranker="levenshtein",
+                        max_length=16, adequacy_threshold=0.90, fluency_threshold=0.90):
+        if use_gpu:
+            device = "cuda:0"
+        else:
+            device = "cpu"
+
+        self.model = self.model.to(device)
+
+        import re
+
+        save_phrase = input_phrase
+        if len(input_phrase) >= max_length:
+            max_length += 32
+
+        input_phrase = re.sub('[^a-zA-Z0-9 \?\'\-\/\:\.]', '', input_phrase)
+        input_phrase = "paraphrase: " + input_phrase
+        input_ids = self.tokenizer.encode(input_phrase, return_tensors='pt')
+        input_ids = input_ids.to(device)
+        preds = self.model.generate(
+            input_ids,
+            do_sample=False,
+            max_length=max_length,
+            top_k=50,
+            top_p=0.95,
+            early_stopping=True,
+            num_return_sequences=1,
+            repetition_penalty=1.5,
+            length_penalty=0,
+        )
+
+        paraphrases = set()
+
+        for pred in preds:
+            gen_pp = self.tokenizer.decode(pred, skip_special_tokens=True).lower()
+            gen_pp = re.sub('[^a-zA-Z0-9 \?\'\-]', '', gen_pp)
+            paraphrases.add(gen_pp)
+
+        adequacy_filtered_phrases = self.adequacy_score.filter(input_phrase, paraphrases, adequacy_threshold, device)
+        if len(adequacy_filtered_phrases) > 0:
+            fluency_filtered_phrases = self.fluency_score.filter(adequacy_filtered_phrases, fluency_threshold, device)
+            if len(fluency_filtered_phrases) > 0:
+                diversity_scored_phrases = self.diversity_score.rank(input_phrase, fluency_filtered_phrases,
+                                                                     diversity_ranker)
+                para_phrases = []
+                for para_phrase, diversity_score in diversity_scored_phrases.items():
+                    para_phrases.append((para_phrase, diversity_score))
+                para_phrases.sort(key=lambda x: x[1], reverse=True)
+                return para_phrases
+            else:
+                return [(save_phrase, 0)]

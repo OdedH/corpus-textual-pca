@@ -42,7 +42,7 @@ class Customized20Newsgroups(Dataset):
 
 
 class EmailsDataset(torch.utils.data.Dataset):
-    def __init__(self, path: str, categories: List[str] = None, transform=None):
+    def __init__(self, path="./data/emails/Data", categories: List[str] = None, transform=None):
         self.transform = transform
         folders = os.listdir(path)
         data = []
