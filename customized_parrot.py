@@ -74,7 +74,7 @@ class ParrotTextualPCA(Parrot):
         self.mean_phrase = self.wordnet_merge_similar_words(mean_phrase)
         return self.mean_phrase
 
-    def generate_from_latent(self, encoder_outputs=None, num_candidates=512, device="cuda"):
+    def generate_from_latent(self, encoder_outputs=None, num_candidates=512, max_len=8, device="cuda"):
         self.device = device
 
         self.model = self.model.to(device)
@@ -84,7 +84,7 @@ class ParrotTextualPCA(Parrot):
         preds = self.model.generate(
             None,
             do_sample=True,
-            max_length=8,
+            max_length=max_len,
             top_k=64,
             top_p=0.9,
             early_stopping=True,
@@ -161,7 +161,7 @@ class ParrotTextualPCA(Parrot):
                 acc.append(projected_data.to("cpu"))
                 torch.cuda.empty_cache()
         texts_projections = torch.cat(acc).to(device)
-        texts_projections = texts_projections / torch.norm(texts_projections, dim=1, keepdim=True)
+        texts_projections = texts_projections / torch.norm(texts_projections, dim=-1, keepdim=True)
         return texts_projections
 
     def generate_principal_phrases(self, shorten_texts: List[str], num_of_phrases: int, mean_phrase,
@@ -175,19 +175,21 @@ class ParrotTextualPCA(Parrot):
             texts_encoder = self.texts_encoder
         if texts_projections is None:
             if self.texts_projections is None:
-                self.texts_projections = self.project_phrases_for_matching(shorten_texts, 20, texts_encoder)
+                self.texts_projections = self.project_phrases_for_matching(shorten_texts, 20, texts_encoder,
+                                                                           device=device)
             texts_projections = self.texts_projections
         if mean_encoder_outputs is None:
-            mean_encoder_outputs = self.get_avg_embedding(shorten_texts)
+            mean_encoder_outputs = self.get_avg_embedding(shorten_texts, device=device)
 
         # Mean Sentence
-        mean_phrase_encoding = self.project_phrases_for_matching([mean_phrase], 1, texts_encoder)
+        mean_phrase_encoding = self.project_phrases_for_matching([mean_phrase], 1, texts_encoder, device=device)
         # Text projections
         texts_projections = texts_projections - mean_phrase_encoding
 
-        candidate_phrases = self.generate_from_latent(encoder_outputs=mean_encoder_outputs)
+        candidate_phrases = self.generate_from_latent(encoder_outputs=mean_encoder_outputs, device=device)
         candidate_phrases = self.postprocess_phrases(candidate_phrases)
-        candidate_phrases_embeddings = self.project_phrases_for_matching(candidate_phrases, 20, texts_encoder)
+        candidate_phrases_embeddings = self.project_phrases_for_matching(candidate_phrases, 20, texts_encoder,
+                                                                         device=device)
         for i in range(num_of_phrases):
             # Var
             variance = self.calc_variance_per_suggestion(candidate_phrases_embeddings, texts_projections)
@@ -210,7 +212,6 @@ class ParrotTextualPCA(Parrot):
         mu = torch.sum(normed_similarity_scores, dim=0) / normed_similarity_scores.size(0)
         return torch.sum(torch.square(normed_similarity_scores - mu), dim=0)
 
-
     def get_orthogonal_delta_penalty(self, candidate_sentences_embeddings, previous_phrases_embeddings):
         # We want the orthogonality penalty to be depended on the current sentence only
         prev_penalty = self.calc_orthogonality_penalty(previous_phrases_embeddings.to(self.device))
@@ -222,12 +223,10 @@ class ParrotTextualPCA(Parrot):
         penalty_per_candidate = torch.tensor(penalty_per_candidate).to(self.device)
         return penalty_per_candidate
 
-
     def calc_orthogonality_penalty(self, vectors):
         count_vectors = vectors.size(0)
         eye = torch.eye(count_vectors).to(self.device)
         return torch.dist(vectors @ vectors.T, eye)
-
 
     def wordnet_merge_similar_words(self, mean_phrase):
         og_mean_phrase = mean_phrase
@@ -239,8 +238,8 @@ class ParrotTextualPCA(Parrot):
             # sort indices
             get_score_f = self.get_fine_similarity_func_from_word(word_i)
             sorted_words = sorted(og_mean_phrase.split(),
-                                          key=lambda x: get_score_f(x),
-                                          reverse=True)
+                                  key=lambda x: get_score_f(x),
+                                  reverse=True)
             for word_k in sorted_words:
                 if word_k in used_words: continue
                 if word_i == word_k: continue
