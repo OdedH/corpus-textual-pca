@@ -100,85 +100,24 @@ def calc_ortho(phrases_embeddings):
     return torch.dist(phrases_embeddings @ phrases_embeddings.T, eye)
 
 
-def baseline_several_datasets(names: List[str], parrot_model):
-    baseline_results = {"pca": [], "kmeans": [], "pca_var": [], "pca_ortho": [], "kmeans_var": [], "kmeans_ortho": [],
-                        "names": names}
-    for name in names:
-        filename = f"shorten_phrases_facebook_{name}_100.pkl"
-        shorten_texts = summarize_with_facebook(None, filename)
-        texts_embeddings = parrot_model.project_phrases_for_matching(shorten_texts, 20)
-        pca_phrases = get_pca_phrases(texts_embeddings, parrot_model)
-        kmeans_phrases = get_kmeans_phrases(texts_embeddings, parrot_model)
-        baseline_results["pca"].append(pca_phrases)
-        baseline_results["kmeans"].append(kmeans_phrases)
-        pca_embeddings = parrot_model.project_phrases_for_matching(pca_phrases, 20).to("cuda")
-        kmeans_embeddings = parrot_model.project_phrases_for_matching(kmeans_phrases, 20).to("cuda")
-        baseline_results["pca_var"].append(calc_var(pca_embeddings, texts_embeddings))
-        baseline_results["pca_ortho"].append(calc_ortho(pca_embeddings))
-        baseline_results["kmeans_var"].append(calc_var(kmeans_embeddings, texts_embeddings))
-        baseline_results["kmeans_ortho"].append(calc_ortho(kmeans_embeddings))
-    with open("baselines_results.pkl", "wb") as f:
-        dill.dump(baseline_results, f)
-    return baseline_results
-
-
-def ours(names, phrases, parrot_model):
-    baseline_results = {"var": [], "ortho": [],
-                        "names": names, "phrases": phrases}
-
-    for i in range(len(names)):
-        filename = f"shorten_phrases_facebook_{names[i]}_100.pkl"
-        shorten_texts = summarize_with_facebook(None, filename)
-        texts_embeddings = parrot_model.project_phrases_for_matching(shorten_texts, 20)
-        embeddings = parrot_model.project_phrases_for_matching(phrases[i], 20).to("cuda")
-        baseline_results["var"].append(calc_var(embeddings, texts_embeddings))
-        baseline_results["ortho"].append(calc_ortho(embeddings))
-    with open("ours_results.pkl", "wb") as f:
-        dill.dump(baseline_results, f)
-    return baseline_results
-
-
 if __name__ == "__main__":
     # Setup
     torch.random.manual_seed(0)
     random.seed(0)
 
-    # parrot_textual_pca = ParrotTextualPCA()
-    # food_reviews_dataset = FoodReviewsDataset()
-    # num_samples = 100
-    # title = "amazon_food"
-    # original_texts = list(food_reviews_dataset[0:num_samples])
+    parrot_textual_pca = ParrotTextualPCA()
+    food_reviews_dataset = FoodReviewsDataset()
+    num_samples = 100
+    title = "amazon_food"
+    original_texts = list(food_reviews_dataset[0:num_samples])
 
     # Summarize
-    # filename = f"shorten_phrases_facebook_{title}_{num_samples}.pkl"
-    # shorten_texts = summarize_with_facebook(original_texts, filename)
+    filename = f"shorten_phrases_facebook_{title}_{num_samples}.pkl"
+    shorten_texts = summarize_with_facebook(original_texts, filename)
 
     # Embeds
-    # texts_embeds = parrot_textual_pca.project_phrases_for_matching(shorten_texts, 20)
+    texts_embeds = parrot_textual_pca.project_phrases_for_matching(shorten_texts, 20)
     # KMEANS
-    # kmeans_phrases = get_kmeans_phrases(texts_embeds, parrot_textual_pca)
+    kmeans_phrases = get_kmeans_phrases(texts_embeds, parrot_textual_pca)
     # PCA
-    # regular_pca_phrases = get_pca_phrases(texts_embeds, parrot_textual_pca)
-
-    list_of_titles = ["amazon_food", "movies", "movies_action", "movies_comedy", "emails_science",
-                      "news_sport", "news_med", "soc.religion.christian"]
-
-    phrases = [['excellent', 'medicine', 'new', 'love', 'long', 'foods'],
-               ['second', 'mysterious', 'play', 'living', 'war', 'unknown'],
-               ['character', 'mysterious', 'care', 'mission', 'prison', 'world'],
-               ['health', 'mysterious', 'master', 'created', 'characters', 'doctor'],
-               ['cloud', 'new real life', 'alpha', 'health work security', 'good said'],
-               ['captain', 'war', 'play', 'new', 'united'],
-               ['light', 'brain', 'patients', 'general', 'food'],
-               ['health', 'new', 'mission']
-               ]
-    # ours(list_of_titles, phrases, parrot_textual_pca)
-
-    # baseline_several_datasets(list_of_titles, parrot_textual_pca)
-    with open("baselines_results.pkl", "rb") as f:
-        results = dill.load(f)
-
-    with open("ours_results.pkl", "rb") as f:
-        ours_results = dill.load(f)
-
-    print()
+    regular_pca_phrases = get_pca_phrases(texts_embeds, parrot_textual_pca)

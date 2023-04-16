@@ -1,0 +1,5 @@
+# Describing a Corpus with Textual-PCA
+__Abstract__: We aim to provide a semantic description of a corpus that captures both the attributes of individual texts and the variations within the corpus. Our approach is similar to Principal Component Analysis, but instead of projection vectors, we use generated phrases.
+First, we generate a centroid phrase that has the highest average semantic similarity to the texts in the corpus. To do this, we use pretrained text-to-text models for both the similarity computation and phrase generation. Next, we generate the phrase that produces the highest variation among the similarity scores, using the same models. We then generate the next phrase that maximizes the variance, while being orthogonal in the latent space to the highest-variance phrase, and the process continues.
+
+Based on [Describing Sets of Images with Textual-PCA](https://arxiv.org/abs/2210.12112).
